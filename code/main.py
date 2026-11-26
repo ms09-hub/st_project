@@ -4,224 +4,143 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# ==================================================
-# 1. 기본 설정
-# ==================================================
 st.set_page_config(
-    page_title="한강 수계 수질 데이터 분석",
-    page_icon="💧",
+    page_title="한강 수계 수질 분석",
+    page_icon="🌊",
     layout="wide"
 )
 
-st.title("💧 한강 수계 하천 수질 데이터 분석")
-
-st.markdown(
-    "### 한강 수계 하천의 수질 특성으로 용존산소량을 추정할 수 있을까?"
-)
-
-st.caption("DATA ANALYSIS · WATER QUALITY · DISSOLVED OXYGEN")
-
-st.write(
-    "수온, 총유기탄소량(TOC), 수소 이온 농도(pH), "
-    "전기전도도 등의 수질 특성을 분석하여 "
-    "용존산소량(DO)과의 관계를 탐색합니다."
-)
-
-st.divider()
-
-
-# ==================================================
-# 2. GitHub CSV 데이터 연결
-# ==================================================
 CSV_URL = "https://raw.githubusercontent.com/ms09-hub/st_project/refs/heads/main/data/%ED%95%9C%EA%B0%95%EC%88%98%EA%B3%84_%EC%A0%84%EC%B2%98%EB%A6%AC%EC%99%84%EB%A3%8C_154%ED%96%8911%EC%97%B4-v3.csv"
+
+st.title("🌊 한강 수계 하천 수질 데이터 분석")
+st.subheader("한강 수계 하천의 수질 특성으로 용존산소량을 추정할 수 있을까?")
+st.write(
+    "수온, TOC, 수소이온농도, 전기전도도 등의 수질 변수와 "
+    "용존산소량(DO)의 관계를 데이터와 그래프로 분석합니다."
+)
 
 
 @st.cache_data(ttl=600)
 def load_data():
-    try:
-        data = pd.read_csv(CSV_URL, encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        data = pd.read_csv(CSV_URL, encoding="cp949")
-
-    return data
+    for encoding in ["utf-8-sig", "cp949", "utf-8"]:
+        try:
+            return pd.read_csv(CSV_URL, encoding=encoding)
+        except Exception:
+            continue
+    raise ValueError("CSV 데이터를 불러오지 못했습니다.")
 
 
 try:
     df = load_data()
-
 except Exception as e:
-    st.error("데이터를 불러오지 못했습니다.")
-    st.warning("GitHub CSV 링크와 저장소 상태를 확인해주세요.")
-    st.code(str(e))
+    st.error(f"데이터 불러오기 오류: {e}")
+    st.info("GitHub CSV 주소와 저장소 공개 설정을 확인해 주세요.")
     st.stop()
 
 
-if df.empty:
-    st.error("데이터가 비어 있습니다.")
-    st.stop()
+def find_column(keywords):
+    for col in df.columns:
+        name = str(col).replace(" ", "")
+        if all(word in name for word in keywords):
+            return col
+    return None
 
 
-# ==================================================
-# 3. 데이터 감식
-# ==================================================
-st.header("1. 데이터 감식")
+temp_col = find_column(["수온"])
+do_col = find_column(["DO"]) or find_column(["용존산소"])
+toc_col = find_column(["TOC"])
+ph_col = find_column(["수소이온농도"]) or find_column(["pH"])
+ec_col = find_column(["전기전도도"])
 
-st.write(
-    "수집한 한강 수계 수질 데이터의 규모, 자료형, "
-    "결측값을 확인하여 데이터의 기본적인 특성을 파악합니다."
-)
+analysis_df = df.copy()
 
-col1, col2, col3 = st.columns(3)
+for col in [temp_col, do_col, toc_col, ph_col, ec_col]:
+    if col is not None:
+        analysis_df[col] = pd.to_numeric(
+            analysis_df[col], errors="coerce"
+        )
 
-col1.metric("전체 행 수", f"{df.shape[0]:,}행")
-col2.metric("전체 열 수", f"{df.shape[1]:,}열")
-col3.metric("전체 결측값", f"{df.isnull().sum().sum():,}개")
 
+# --------------------------------------------------
+# 1. 데이터 개요
+# --------------------------------------------------
+
+st.divider()
+st.header("1. 데이터 개요")
+
+c1, c2, c3 = st.columns(3)
+
+c1.metric("전체 행 수", f"{df.shape[0]}개")
+c2.metric("전체 열 수", f"{df.shape[1]}개")
+c3.metric("전체 결측값", f"{df.isna().sum().sum()}개")
 
 st.subheader("데이터 미리보기")
 st.dataframe(df.head(10), use_container_width=True)
 
+st.subheader("열별 데이터 정보")
 
-# 자료형, 결측값 확인
-info_df = pd.DataFrame({
-    "컬럼명": df.columns,
-    "자료형": df.dtypes.astype(str).values,
-    "결측값 수": df.isnull().sum().values
+info = pd.DataFrame({
+    "자료형": df.dtypes.astype(str),
+    "결측값 수": df.isnull().sum(),
+    "결측률(%)": (df.isnull().mean() * 100).round(2)
 })
 
-st.subheader("컬럼별 데이터 정보")
-st.dataframe(info_df, use_container_width=True)
+st.dataframe(info, use_container_width=True)
 
-
-with st.expander("기초 통계량 확인"):
+with st.expander("수치형 데이터 기초 통계"):
     st.dataframe(
-        df.describe().T,
+        df.describe().transpose(),
         use_container_width=True
     )
 
 
-# ==================================================
-# 4. 전처리 과정
-# ==================================================
-st.header("2. 데이터 전처리")
+# --------------------------------------------------
+# 2. 전처리 과정
+# --------------------------------------------------
 
-st.write(
-    "수집한 원본 자료 중 한강 수계에 해당하는 데이터를 선별하고, "
-    "분석에 필요한 측정값이 누락된 행을 제거하여 분석 데이터를 구성했습니다."
-)
+st.divider()
+st.header("2. 데이터 전처리 과정")
 
-preprocess_df = pd.DataFrame({
-    "단계": [
+preprocess = pd.DataFrame({
+    "전처리 단계": [
         "원본 데이터",
         "한강 수계 데이터 선별",
         "결측값 제거 후 최종 데이터"
     ],
-    "행 수": [185, 171, 154],
-    "처리 내용": [
-        "수집한 전체 측정 자료",
-        "한강 수계에 해당하지 않는 자료 제외",
-        "결측값이 포함된 행 제거"
-    ]
+    "데이터 수": [185, 171, 154]
 })
 
-st.dataframe(preprocess_df, use_container_width=True)
-
-
-st.markdown("#### 결측값과 이상치 처리 기준")
+st.dataframe(
+    preprocess,
+    use_container_width=True,
+    hide_index=True
+)
 
 st.markdown("""
-- **결측값:** 측정값이 비어 있는 행은 분석의 정확성을 위해 제외했다.
-- **이상치:** 다른 데이터에 비해 크게 벗어난 값은 이상치 후보로 확인했다.
-- **처리 기준:** 이상치 후보라도 실제 환경에서 나타날 수 있는 측정값이므로, 명확한 측정 오류가 확인되지 않은 값은 임의로 삭제하지 않았다.
+- 원본 185개 자료에서 동해로 직접 유입되는 하천 자료 14개를 제외하였다.
+- 한강 수계 자료 171개 중 결측값이 포함된 17개 행을 제거하였다.
+- 최종 154개 자료를 분석에 활용하였다.
+- 현재 앱은 전처리가 완료된 CSV 파일을 불러와 분석한다.
 """)
 
-st.info(
-    "결측값 제거로 분석 자료의 완전성을 높였지만, "
-    "제외된 데이터의 특성이 전체 수질 특성과 달랐을 경우 "
-    "분석 결과에 영향을 줄 가능성이 있다."
-)
 
+# --------------------------------------------------
+# 3. 이상치 후보 분석
+# --------------------------------------------------
 
-# ==================================================
-# 5. 분석할 컬럼 찾기
-# ==================================================
-def find_column(columns, candidates):
-    for candidate in candidates:
-        if candidate in columns:
-            return candidate
-    return None
-
-
-temp_col = find_column(
-    df.columns,
-    ["수온(℃)", "수온(°C)", "수온", "Temperature"]
-)
-
-do_col = find_column(
-    df.columns,
-    ["DO(㎎/L)", "DO(mg/L)", "DO(mg/l)", "용존산소량", "DO"]
-)
-
-toc_col = find_column(
-    df.columns,
-    ["TOC(㎎/L)", "TOC(mg/L)", "총유기탄소량", "TOC"]
-)
-
-ph_col = find_column(
-    df.columns,
-    ["수소이온농도", "pH", "PH"]
-)
-
-ec_col = find_column(
-    df.columns,
-    ["전기전도도(μS/㎝)", "전기전도도", "EC"]
-)
-
-
-# 수온과 DO가 없으면 분석 중단
-if temp_col is None or do_col is None:
-    st.error("수온 또는 DO 컬럼을 찾을 수 없습니다.")
-
-    st.write("현재 데이터 컬럼 목록")
-    st.write(list(df.columns))
-
-    st.stop()
-
-
-# 분석할 변수 구성
-analysis_cols = [
-    col for col in [temp_col, do_col, toc_col, ph_col, ec_col]
-    if col is not None
-]
-
-analysis_df = df[analysis_cols].copy()
-
-# 숫자 형태로 변환
-for col in analysis_cols:
-    analysis_df[col] = pd.to_numeric(
-        analysis_df[col],
-        errors="coerce"
-    )
-
-
-# ==================================================
-# 6. 이상치 후보 분석 (IQR)
-# ==================================================
+st.divider()
 st.header("3. 이상치 후보 확인")
 
-st.write(
-    "IQR(사분위 범위) 방법을 사용하여 "
-    "각 수질 변수에서 일반적인 데이터 범위를 벗어나는 "
-    "이상치 후보를 확인합니다."
-)
+numeric_cols = analysis_df.select_dtypes(
+    include=np.number
+).columns
 
-outlier_results = []
+outlier_result = []
 
-for col in analysis_cols:
-
+for col in numeric_cols:
     values = analysis_df[col].dropna()
 
-    if len(values) == 0:
+    if len(values) < 4:
         continue
 
     q1 = values.quantile(0.25)
@@ -231,331 +150,237 @@ for col in analysis_cols:
     lower = q1 - 1.5 * iqr
     upper = q3 + 1.5 * iqr
 
-    outlier_count = (
-        (values < lower) | (values > upper)
-    ).sum()
+    count = ((values < lower) | (values > upper)).sum()
 
-    outlier_results.append({
-        "변수": col,
-        "Q1": round(q1, 3),
-        "Q3": round(q3, 3),
-        "IQR": round(iqr, 3),
-        "하한": round(lower, 3),
-        "상한": round(upper, 3),
-        "이상치 후보 수": int(outlier_count)
+    outlier_result.append({
+        "항목": col,
+        "IQR 하한": round(lower, 3),
+        "IQR 상한": round(upper, 3),
+        "이상치 후보 수": int(count)
     })
 
-
-if outlier_results:
+if outlier_result:
     st.dataframe(
-        pd.DataFrame(outlier_results),
-        use_container_width=True
+        pd.DataFrame(outlier_result),
+        use_container_width=True,
+        hide_index=True
     )
 
 st.caption(
     "IQR 범위를 벗어난 값은 이상치 후보일 뿐, "
-    실제 측정 오류라고 단정할 수 없습니다. "
-    따라서 본 분석에서는 이상치 후보를 임의로 삭제하지 않았습니다."
+    "실제 측정 오류라고 단정할 수 없습니다. "
+    "따라서 본 분석에서는 이상치 후보를 임의로 삭제하지 않았습니다."
 )
 
 
-# ==================================================
-# 7. DO 데이터 준비
-# ==================================================
-plot_df = analysis_df.dropna(subset=[do_col]).copy()
+# --------------------------------------------------
+# 4. DO 분포
+# --------------------------------------------------
 
-do_values = plot_df[do_col]
-
-if len(do_values) == 0:
-    st.error("분석 가능한 DO 데이터가 없습니다.")
-    st.stop()
-
-
-# ==================================================
-# 8. 그래프 1 : DO 분포
-# ==================================================
 st.divider()
-st.header("4. 용존산소량(DO)의 분포")
+st.header("4. 용존산소량(DO) 분포")
 
-st.write(
-    "전체 측정 지점에서 용존산소량이 어떤 범위에 분포하는지 "
-    "히스토그램으로 확인합니다."
-)
+if do_col is not None:
 
-fig1, ax1 = plt.subplots(figsize=(10, 5))
+    do_values = analysis_df[do_col].dropna()
 
-ax1.hist(
-    do_values,
-    bins=15,
-    edgecolor="black",
-    alpha=0.8
-)
+    if len(do_values) > 0:
 
-ax1.set_title("한강 수계 용존산소량(DO) 분포")
-ax1.set_xlabel("용존산소량 (mg/L)")
-ax1.set_ylabel("측정 빈도")
-ax1.grid(axis="y", alpha=0.3)
+        c1, c2, c3, c4 = st.columns(4)
 
-st.pyplot(fig1, use_container_width=True)
-plt.close(fig1)
+        c1.metric("평균", f"{do_values.mean():.2f} mg/L")
+        c2.metric("중앙값", f"{do_values.median():.2f} mg/L")
+        c3.metric("최솟값", f"{do_values.min():.2f} mg/L")
+        c4.metric("최댓값", f"{do_values.max():.2f} mg/L")
 
+        fig, ax = plt.subplots(figsize=(8, 4))
 
-# DO 기초 통계
-do_mean = do_values.mean()
-do_median = do_values.median()
-do_min = do_values.min()
-do_max = do_values.max()
-do_std = do_values.std()
+        ax.hist(
+            do_values,
+            bins=12,
+            edgecolor="black"
+        )
 
+        ax.set_title("Distribution of Dissolved Oxygen")
+        ax.set_xlabel("DO (mg/L)")
+        ax.set_ylabel("Frequency")
+        ax.grid(axis="y", alpha=0.25)
 
-c1, c2, c3, c4 = st.columns(4)
+        st.pyplot(fig)
+        plt.close(fig)
 
-c1.metric("평균 DO", f"{do_mean:.2f} mg/L")
-c2.metric("중앙값 DO", f"{do_median:.2f} mg/L")
-c3.metric("최솟값 DO", f"{do_min:.2f} mg/L")
-c4.metric("최댓값 DO", f"{do_max:.2f} mg/L")
+        st.write(
+            f"DO의 평균은 {do_values.mean():.2f} mg/L, "
+            f"중앙값은 {do_values.median():.2f} mg/L이다. "
+            "히스토그램을 통해 DO 값이 어느 구간에 집중되어 있는지 "
+            "확인할 수 있다."
+        )
 
+    else:
+        st.warning("DO 데이터가 존재하지 않습니다.")
 
-st.subheader("그래프 해석")
-
-st.write(
-    f"전체 측정 자료의 평균 용존산소량은 {do_mean:.2f} mg/L, "
-    f"중앙값은 {do_median:.2f} mg/L이다. "
-    f"DO는 {do_min:.2f}~{do_max:.2f} mg/L 범위에 분포한다."
-)
-
-st.write(
-    f"표준편차는 {do_std:.2f} mg/L로 나타났다. "
-    "히스토그램을 통해 용존산소량이 특정 범위에 집중되는지, "
-    "또는 다양한 값으로 분포하는지 확인할 수 있다."
-)
+else:
+    st.warning("DO 열을 찾지 못했습니다.")
 
 
-# ==================================================
-# 9. 그래프 2 : 수온과 DO 관계
-# ==================================================
+# --------------------------------------------------
+# 5. 수온과 DO의 관계
+# --------------------------------------------------
+
 st.divider()
 st.header("5. 수온과 용존산소량의 관계")
 
-st.write(
-    "수온과 DO를 산점도로 나타내고, "
-    "상관계수와 추세선을 통해 두 변수의 관계를 분석합니다."
-)
+if temp_col is not None and do_col is not None:
 
-scatter_df = analysis_df.dropna(
-    subset=[temp_col, do_col]
-).copy()
+    pair = analysis_df[[temp_col, do_col]].dropna()
 
-x = scatter_df[temp_col]
-y = scatter_df[do_col]
+    if len(pair) >= 2:
 
+        correlation = pair[temp_col].corr(pair[do_col])
 
-fig2, ax2 = plt.subplots(figsize=(10, 5))
+        fig, ax = plt.subplots(figsize=(8, 5))
 
-ax2.scatter(
-    x,
-    y,
-    alpha=0.7,
-    label="측정 데이터"
-)
-
-# 선형 추세선
-if len(scatter_df) >= 2 and x.nunique() >= 2:
-
-    slope, intercept = np.polyfit(x, y, 1)
-
-    trend_x = np.linspace(x.min(), x.max(), 100)
-    trend_y = slope * trend_x + intercept
-
-    ax2.plot(
-        trend_x,
-        trend_y,
-        linestyle="--",
-        label="선형 추세선"
-    )
-
-    ax2.legend()
-
-
-ax2.set_title("수온과 용존산소량(DO)의 관계")
-ax2.set_xlabel("수온 (℃)")
-ax2.set_ylabel("용존산소량 (mg/L)")
-ax2.grid(alpha=0.3)
-
-st.pyplot(fig2, use_container_width=True)
-plt.close(fig2)
-
-
-# 상관계수
-correlation = x.corr(y)
-
-st.metric(
-    "수온과 DO의 상관계수",
-    f"{correlation:.3f}"
-)
-
-
-st.subheader("그래프 해석")
-
-if correlation < -0.5:
-
-    st.write(
-        f"상관계수는 {correlation:.3f}으로 음의 상관관계가 나타났다. "
-        "수온이 높아질수록 용존산소량이 낮아지는 경향이 비교적 뚜렷하다."
-    )
-
-elif correlation < -0.1:
-
-    st.write(
-        f"상관계수는 {correlation:.3f}으로 약한 음의 상관관계를 보였다. "
-        "수온이 높아질수록 DO가 감소하는 경향이 있지만, "
-        "다른 수질 요인의 영향도 함께 고려할 필요가 있다."
-    )
-
-elif correlation <= 0.1:
-
-    st.write(
-        f"상관계수는 {correlation:.3f}으로 뚜렷한 선형 관계가 나타나지 않았다. "
-        "수온 외에 다른 환경 요인이 DO 변화와 관련되는지 "
-        "추가 분석이 필요하다."
-    )
-
-else:
-
-    st.write(
-        f"상관계수는 {correlation:.3f}으로 양의 상관관계가 나타났다. "
-        "일반적으로 예상되는 수온과 DO의 관계와 다를 수 있으므로 "
-        "측정 지점이나 시간, 다른 수질 변수의 영향 등을 살펴볼 필요가 있다."
-    )
-
-
-# ==================================================
-# 10. 추가 수질 변수와 DO 관계
-# ==================================================
-st.divider()
-st.header("6. 다른 수질 특성과 DO의 관계")
-
-st.write(
-    "수온 외에 TOC, pH, 전기전도도가 "
-    "용존산소량과 어떤 관계를 보이는지 비교합니다."
-)
-
-other_cols = [
-    col for col in [toc_col, ph_col, ec_col]
-    if col is not None
-]
-
-if other_cols:
-
-    correlation_results = []
-
-    for col in other_cols:
-
-        temp_data = analysis_df[[col, do_col]].dropna()
-
-        if len(temp_data) >= 2:
-
-            corr = temp_data[col].corr(temp_data[do_col])
-
-            correlation_results.append({
-                "수질 변수": col,
-                "DO와의 상관계수": round(corr, 3),
-                "데이터 수": len(temp_data)
-            })
-
-
-    if correlation_results:
-
-        st.subheader("수질 변수별 상관관계 비교")
-
-        corr_df = pd.DataFrame(correlation_results)
-
-        st.dataframe(
-            corr_df,
-            use_container_width=True
+        ax.scatter(
+            pair[temp_col],
+            pair[do_col],
+            alpha=0.75
         )
 
-        st.caption(
-            "상관계수는 두 변수 사이의 선형 관계를 나타내며 "
-            "인과관계를 의미하지 않습니다."
+        ax.set_title("Water Temperature vs. Dissolved Oxygen")
+        ax.set_xlabel("Water Temperature (℃)")
+        ax.set_ylabel("DO (mg/L)")
+        ax.grid(alpha=0.25)
+
+        if pair[temp_col].nunique() >= 2:
+
+            x = pair[temp_col].to_numpy(dtype=float)
+            y = pair[do_col].to_numpy(dtype=float)
+
+            slope, intercept = np.polyfit(x, y, 1)
+
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = slope * x_line + intercept
+
+            ax.plot(x_line, y_line)
+
+        st.pyplot(fig)
+        plt.close(fig)
+
+        st.metric(
+            "수온과 DO의 상관계수",
+            f"{correlation:.3f}"
         )
 
-
-        # 각 변수별 산점도
-        for col in other_cols:
-
-            temp_data = analysis_df[[col, do_col]].dropna()
-
-            if len(temp_data) < 2:
-                continue
-
-            fig, ax = plt.subplots(figsize=(8, 4))
-
-            ax.scatter(
-                temp_data[col],
-                temp_data[do_col],
-                alpha=0.7
+        if correlation < 0:
+            st.write(
+                f"수온과 DO 사이에 음의 상관관계가 나타났다. "
+                f"상관계수는 {correlation:.3f}이며, "
+                "이 자료에서는 수온이 높아질수록 DO가 낮아지는 경향을 보인다."
             )
 
-            ax.set_title(f"{col}과 DO의 관계")
-            ax.set_xlabel(col)
-            ax.set_ylabel("용존산소량 (mg/L)")
-            ax.grid(alpha=0.3)
+        elif correlation > 0:
+            st.write(
+                f"수온과 DO 사이에 양의 상관관계가 나타났다. "
+                f"상관계수는 {correlation:.3f}이다. "
+                "예상과 다른 결과라면 측정 시기와 하천 위치, "
+                "다른 수질 요인도 함께 확인할 필요가 있다."
+            )
 
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
+        else:
+            st.write(
+                "수온과 DO 사이에 선형적인 상관관계가 거의 나타나지 않았다."
+            )
+
+        st.caption(
+            "상관관계는 두 변수의 관련성을 나타내며, "
+            "인과관계를 직접 증명하지는 않는다."
+        )
+
+    else:
+        st.warning("수온과 DO를 함께 분석할 수 있는 자료가 부족합니다.")
 
 else:
+    st.warning("수온 또는 DO 열을 확인할 수 없습니다.")
 
-    st.info("추가 수질 변수 데이터를 확인할 수 없습니다.")
 
+# --------------------------------------------------
+# 6. 다른 수질 변수와 DO 비교
+# --------------------------------------------------
 
-# ==================================================
-# 11. 종합 결론
-# ==================================================
 st.divider()
-st.header("7. 종합 분석 및 결론")
+st.header("6. 다른 수질 변수와 DO의 관계")
 
-st.write(
-    "한강 수계 수질 데이터를 분석하여 용존산소량의 분포를 확인하고, "
-    "수온과 DO 사이의 관계를 상관계수와 산점도로 살펴보았다."
-)
+other_variables = [
+    ("TOC", toc_col),
+    ("수소이온농도(pH)", ph_col),
+    ("전기전도도", ec_col)
+]
 
-st.write(
-    f"수온과 DO의 상관계수는 {correlation:.3f}으로 나타났다. "
-    "이를 통해 두 변수 사이의 관계를 수치적으로 확인했으며, "
-    "TOC, pH, 전기전도도 등 다른 수질 특성도 DO와 관련될 수 있음을 탐색했다."
-)
+for label, col in other_variables:
 
-st.write(
-    "하지만 상관관계만으로 특정 변수가 DO 변화의 원인이라고 "
-    "단정하거나 정확한 DO 값을 예측할 수는 없다. "
-    "따라서 이후 여러 수질 변수를 동시에 활용하는 회귀 분석을 실시하고, "
-    "실제 측정값과 예측값의 차이를 비교하여 "
-    "수질 특성으로 용존산소량을 추정할 수 있는지 확인할 필요가 있다."
-)
+    if col is None or do_col is None:
+        continue
+
+    pair = analysis_df[[col, do_col]].dropna()
+
+    if len(pair) < 2 or pair[col].nunique() < 2:
+        continue
+
+    correlation = pair[col].corr(pair[do_col])
+
+    with st.expander(f"{label}와 DO의 관계"):
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+
+        ax.scatter(
+            pair[col],
+            pair[do_col],
+            alpha=0.7
+        )
+
+        ax.set_title(f"{label} vs. DO")
+        ax.set_xlabel(str(col))
+        ax.set_ylabel("DO (mg/L)")
+        ax.grid(alpha=0.25)
+
+        st.pyplot(fig)
+        plt.close(fig)
+
+        st.write(
+            f"상관계수: {correlation:.3f}"
+        )
+
+        st.write(
+            "그래프와 상관계수를 함께 살펴 변수와 DO 사이의 "
+            "관계를 확인할 수 있다. 단, 상관관계가 인과관계를 의미하지는 않는다."
+        )
 
 
-# ==================================================
-# 12. 분석의 한계
-# ==================================================
-with st.expander("분석의 한계 및 추가 탐구"):
+# --------------------------------------------------
+# 7. 결론
+# --------------------------------------------------
 
-    st.markdown("""
-    - 2026년 9월 자료를 중심으로 분석하여 계절별 수질 변화는 충분히 반영하지 못했다.
-    - 측정 지점, 측정 시간, 하천 환경에 따라 수질이 달라질 수 있다.
-    - 결측값이 포함된 자료를 제외했기 때문에 데이터의 특성이 일부 달라졌을 가능성이 있다.
-    - 상관관계만으로 원인과 결과를 판단할 수 없다.
-    - 향후 회귀 분석을 통해 여러 수질 변수를 활용한 DO 추정 가능성을 확인할 수 있다.
-    """)
-
-
-# ==================================================
-# 13. 마무리
-# ==================================================
 st.divider()
+st.header("7. 분석 결론")
+
+st.markdown("""
+이번 분석에서는 한강 수계 하천의 수질 데이터에서
+용존산소량(DO)의 분포를 확인하고,
+수온 및 다른 수질 변수와의 관계를 그래프로 살펴보았다.
+
+특히 수온과 DO의 산점도 및 상관계수를 통해
+두 변수 사이의 관계를 수치적으로 확인할 수 있었다.
+
+그러나 이번 자료는 제한된 측정 시기의 데이터이므로
+모든 계절과 하천에 일반화하기 어렵다.
+또한 상관관계만으로 DO 변화의 원인을 확정할 수 없다.
+
+앞으로 더 다양한 측정 시기와 지점의 데이터를 확보한다면
+수질 특성을 바탕으로 DO를 추정하는 분석의 신뢰도를
+높일 수 있을 것이다.
+""")
 
 st.caption(
-    "한강 수계 수질 데이터를 바탕으로 "
-    "수질 특성과 용존산소량의 관계를 탐색한 데이터 분석 프로젝트"
+    "※ 본 앱은 탐색적 데이터 분석을 위한 앱이며, "
+    "DO 예측 모델을 학습하거나 실제 예측값을 제공하지 않습니다."
 )
